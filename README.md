@@ -1,76 +1,82 @@
 # Demand Forecasting System
 
-A scalable, enterprise-grade demand forecasting platform built to predict business trends using statistical modeling and machine learning. This system is designed to handle time-series forecasting, automated model retraining, and real-time inference while maintaining high performance and reliability.
+An enterprise-grade, highly scalable platform for time-series demand forecasting using statistical modeling and machine learning pipelines. 
 
-## 🏗️ System Architecture
+## System Architecture
 
-The application relies on a modular, microservices-inspired architecture managed through Docker Compose, ensuring clean separation of concerns and robust scalability.
+The application is built on a microservices-inspired architecture designed to handle heavy ML workloads without blocking the main API gateway.
 
-### Core Subsystems
+```mermaid
+graph TD
+    Client[Client Applications] -->|REST API / JWT| API[FastAPI Gateway]
+    
+    subgraph "Core Backend Services"
+        API <-->|Async DB Operations| DB[(PostgreSQL Database)]
+        API <-->|Session Cache / Broker| Redis[(Redis)]
+        API -->|Task Delegation| Celery[Celery Task Queue]
+    end
+    
+    subgraph "Machine Learning Engine"
+        Celery <-->|Message Broker| Redis
+        Celery <-->|Persist Logs / Models| DB
+        Celery --> FE[Feature Engineering Pipeline]
+        FE --> ML[ML Predictors Factory]
+        ML --> P[Prophet]
+        ML --> X[XGBoost]
+        ML --> S[SARIMAX]
+    end
+    
+    subgraph "Observability"
+        Prom[Prometheus] -.->|Scrapes /metrics| API
+        Grafana[Grafana] -.->|Visualizes| Prom
+    end
+```
 
-1. **API Gateway (FastAPI)**
-   - Acts as the primary entry point for all client requests.
-   - Handles JWT-based authentication, request validation, and routing.
-   - Fully asynchronous, ensuring that the event loop is never blocked by I/O operations.
+### Key Components
 
-2. **Machine Learning Engine & Workers (Celery + Redis)**
-   - **Queue Broker:** Redis acts as the message broker for background task distribution.
-   - **Background Processing:** Celery workers handle all CPU-intensive machine learning tasks (training, evaluation, and prediction).
-   - This decoupling is critical: it guarantees that heavy model training processes never degrade the response time of the customer-facing API.
+1. **FastAPI Gateway**: Serves as the primary entry point for all client requests. It handles JWT authentication, routing, and ensures non-blocking I/O operations through asynchronous execution.
+2. **PostgreSQL**: The relational database for storing users, model metadata, feature registries, predictions, and analytics metrics. Connected via the `asyncpg` driver.
+3. **Redis**: Acts as the message broker for Celery and as an in-memory cache for high-frequency queries.
+4. **Celery Task Queue**: ML training and inference are CPU-bound and synchronous. Celery seamlessly offloads these tasks to background workers, protecting the API event loop from crashing under load.
+5. **Feature Engineering Pipeline**: Organically generates lag features, rolling statistics, and temporal encodings to capture non-linear trends.
+6. **Machine Learning Engine**: Implements a uniform predictor interface for easily swapping out algorithms (`Prophet`, `XGBoost`, `Statsmodels/SARIMAX`).
+7. **Observability Stack**: Prometheus aggregates operational metrics (latency, queue depths, model drift), and Grafana provides real-time dashboards.
 
-3. **Database Layer (PostgreSQL)**
-   - Stores user data, model metadata, historical predictions, and analytics metrics.
-   - Interacted with purely via asynchronous operations (`asyncpg`) and SQLAlchemy models, with schema versioning tracked by Alembic.
+## Quick Start
 
-4. **Observability Stack (Prometheus + Grafana)**
-   - FastAPI `/metrics` are scraped continuously.
-   - Allows for real-time monitoring of API latency, background task queue lengths, and model accuracy drift.
+### 1. Environment Setup
 
-## 🧠 Machine Learning & Feature Engineering
+Copy the example environment variables:
+```bash
+cp .env.example .env
+```
 
-### Forecasting Strategy Pattern
-The system implements a unified `BasePredictor` interface that dynamically wraps multiple algorithms depending on the requested configuration:
-- **Prophet:** For capturing complex weekly/yearly seasonality and holiday effects.
-- **XGBoost:** A gradient boosting approach optimized for non-linear feature interactions.
-- **SARIMAX (Statsmodels):** Traditional statistical modeling for autoregressive trends.
+### 2. Launching the Infrastructure
 
-### Automated Feature Engineering
-To maximize model accuracy (specifically for XGBoost), the system includes a dedicated `FeatureEngineer` pipeline that dynamically transforms raw time-series data into rich feature matrices. It automatically extracts:
-- Temporal identifiers (month, day of week, weekend flags).
-- Autoregressive lag features (`t-1`, `t-7`, `t-14`).
-- Rolling window statistics (7-day moving averages and standard deviations).
+The entire platform is containerized. Start it using Docker Compose:
+```bash
+docker-compose up --build
+```
 
-## 🚀 Deployment & Installation
+This command will spin up:
+- The FastAPI Backend (`http://localhost:8000`)
+- OpenAPI Documentation (`http://localhost:8000/docs`)
+- The Celery Worker
+- PostgreSQL Database
+- Redis
+- Prometheus (`http://localhost:9090`)
+- Grafana (`http://localhost:3000`)
 
-The entire infrastructure is containerized and can be launched with a single command.
+### 3. Database Migrations
 
-### Prerequisites
-- Docker & Docker Compose
-- Python 3.11+ (if running outside of Docker)
+Apply the initial schema:
+```bash
+docker-compose exec backend alembic upgrade head
+```
 
-### Local Deployment
+## Running Tests
 
-1. **Clone and Setup Environment**
-   ```bash
-   cp .env.example .env
-   ```
-2. **Start the Infrastructure**
-   ```bash
-   docker-compose up --build -d
-   ```
-3. **Run Database Migrations**
-   ```bash
-   docker-compose exec backend alembic upgrade head
-   ```
-
-### Accessing the Services
-- **FastAPI Backend:** `http://localhost:8000`
-- **Swagger API Docs:** `http://localhost:8000/docs`
-- **Prometheus:** `http://localhost:9090`
-- **Grafana:** `http://localhost:3000`
-
-## 📡 Core API Endpoints
-
-- `POST /api/v1/auth/register` & `login`: JWT Authentication layer.
-- `POST /api/v1/models/train`: Asynchronously triggers a Celery worker to train a requested model (Prophet, XGBoost, or Statsmodels).
-- `GET /api/v1/analytics/accuracy-improvement`: Benchmarks and validates organic error reduction via the implemented feature engineering pipelines against naive baselines.
+To run the automated test suite locally:
+```bash
+pytest tests/
+```
